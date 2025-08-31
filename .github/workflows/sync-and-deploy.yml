@@ -1,0 +1,240 @@
+name: Sync and Deploy Vinted Notifications
+
+on:
+  schedule:
+    # Daily sync at 6:00 UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    inputs:
+      force_deploy:
+        description: 'Force deployment even if no changes'
+        required: false
+        default: false
+        type: boolean
+  push:
+    branches: [ main ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    outputs:
+      has_changes: ${{ steps.sync.outputs.has_changes }}
+      needs_dependency_update: ${{ steps.sync.outputs.needs_dependency_update }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/Fuyucch1/Vinted-Notifications.git || true
+          git fetch upstream
+
+      - name: Sync with upstream
+        id: sync
+        run: |
+          # Get the latest commit from upstream
+          UPSTREAM_COMMIT=$(git rev-parse upstream/main)
+          CURRENT_COMMIT=$(git rev-parse HEAD)
+          
+          echo "Upstream commit: $UPSTREAM_COMMIT"
+          echo "Current commit: $CURRENT_COMMIT"
+          
+          if [ "$UPSTREAM_COMMIT" = "$CURRENT_COMMIT" ]; then
+            echo "No changes from upstream"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+            echo "needs_dependency_update=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          # Check if requirements.txt will change
+          REQUIREMENTS_CHANGED=false
+          if git diff HEAD..upstream/main --name-only | grep -q "requirements.txt"; then
+            REQUIREMENTS_CHANGED=true
+            echo "requirements.txt has changes"
+          fi
+          
+          # Attempt to merge upstream changes
+          if git merge upstream/main --no-edit; then
+            echo "Successfully merged upstream changes"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "needs_dependency_update=$REQUIREMENTS_CHANGED" >> $GITHUB_OUTPUT
+            
+            # Push the merged changes
+            git push origin main
+          else
+            echo "Merge conflict detected. Manual intervention required."
+            echo "Please resolve conflicts manually and rerun the workflow."
+            exit 1
+          fi
+
+      - name: Update dependencies if needed
+        if: steps.sync.outputs.needs_dependency_update == 'true'
+        run: |
+          # Install UV
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          source $HOME/.cargo/env
+          
+          # Read requirements.txt and update pyproject.toml
+          python << 'EOF'
+          import re
+          import toml
+          
+          # Read requirements.txt
+          with open('requirements.txt', 'r') as f:
+              requirements = [line.strip() for line in f if line.strip() and not line.startswith('#')]
+          
+          # Read current pyproject.toml
+          with open('pyproject.toml', 'r') as f:
+              pyproject = toml.load(f)
+          
+          # Update dependencies
+          pyproject['project']['dependencies'] = requirements
+          
+          # Write back pyproject.toml
+          with open('pyproject.toml', 'w') as f:
+              toml.dump(pyproject, f)
+          
+          print("Updated pyproject.toml with new dependencies")
+          EOF
+          
+          # Generate new lock file
+          uv lock
+          
+          # Check if there are changes to commit
+          if git diff --quiet pyproject.toml uv.lock; then
+            echo "No dependency changes to commit"
+          else
+            echo "Committing dependency updates"
+            git add pyproject.toml uv.lock
+            git commit -m "Update dependencies from upstream requirements.txt
+            
+            🤖 Generated with [Claude Code](https://claude.ai/code)
+            
+            Co-Authored-By: Claude <noreply@anthropic.com>"
+            git push origin main
+          fi
+
+  build-and-push:
+    runs-on: ubuntu-latest
+    needs: sync-upstream
+    if: always() && !cancelled() && (needs.sync-upstream.result == 'success' || needs.sync-upstream.result == 'skipped')
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      image_digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=pr
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        id: build
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    runs-on: self-hosted
+    needs: [sync-upstream, build-and-push]
+    if: always() && !cancelled() && needs.build-and-push.result == 'success'
+    environment: production
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Create data and logs directories
+        run: |
+          mkdir -p data logs
+          chmod 755 data logs
+
+      - name: Pull latest image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Stop existing container
+        run: |
+          docker-compose down || true
+
+      - name: Deploy new container
+        run: |
+          docker-compose up -d
+
+      - name: Wait for service to be ready
+        run: |
+          echo "Waiting for service to start..."
+          for i in {1..30}; do
+            if curl -f -s http://localhost:8000/health > /dev/null 2>&1; then
+              echo "Service is ready!"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "Service failed to start within timeout"
+              docker-compose logs
+              exit 1
+            fi
+            sleep 10
+          done
+
+      - name: Clean up old images
+        run: |
+          # Remove images older than 7 days, keep at least 2 images
+          docker image prune -a -f --filter "until=168h"
+          # Remove dangling images
+          docker image prune -f
+
+  notify:
+    runs-on: ubuntu-latest
+    needs: [sync-upstream, build-and-push, deploy]
+    if: always()
+    steps:
+      - name: Notify on success
+        if: needs.deploy.result == 'success'
+        run: |
+          echo "✅ Vinted Notifications successfully synced and deployed!"
+          echo "Changes detected: ${{ needs.sync-upstream.outputs.has_changes }}"
+          echo "Dependency updates: ${{ needs.sync-upstream.outputs.needs_dependency_update }}"
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "❌ Vinted Notifications sync/deploy failed!"
+          echo "Please check the workflow logs and resolve any issues."

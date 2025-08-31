@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  vinted-notifications:
+    image: ghcr.io/terrencestella/vinted-notifications:latest
+    container_name: vinted-notifications
+    ports:
+      - "8000:8000"  # Web UI
+      - "8001:8001"  # RSS Feed
+    volumes:
+      - ./vinted:/app
+    environment:
+      - PYTHONUNBUFFERED=1
+      - ENV=production
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+networks:
+  default:
+    driver: bridge
