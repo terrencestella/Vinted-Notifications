@@ -8,6 +8,7 @@ services:
     volumes:
       - ./vinted/data:/app/data
       - ./vinted/logs:/app/logs
+      - ./vinted/vinted_notifications.db:/app/vinted_notifications.db
     environment:
       - PYTHONUNBUFFERED=1
       - ENV=production

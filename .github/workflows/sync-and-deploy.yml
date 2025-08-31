@@ -175,7 +175,7 @@ jobs:
   deploy:
     runs-on: self-hosted
     needs: [sync-upstream, build-and-push]
-    if: always() && !cancelled() && needs.build-and-push.result == 'success'
+    if: false # Disabled until self-hosted runner is set up
     environment: production
     steps:
       - name: Checkout repository
