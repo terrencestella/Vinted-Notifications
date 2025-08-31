@@ -166,8 +166,7 @@ def plugin_checker():
 if __name__ == "__main__":
     # Starting sequence
     # Db check
-    db_path = os.getenv('DB_PATH', 'vinted_notifications.db')
-    if not os.path.exists(db_path):
+    if not os.path.exists("./vinted_notifications.db"):
         db.create_or_update_sqlite_db("initial_db.sql")
         logger.info("Database created successfully")
     else:

@@ -6,12 +6,11 @@ services:
       - "8000:8000"  # Web UI
       - "8001:8001"  # RSS Feed
     volumes:
-      - ./vinted/database:/app/database
+      - ./vinted/data:/app/data
       - ./vinted/logs:/app/logs
     environment:
       - PYTHONUNBUFFERED=1
       - ENV=production
-      - DB_PATH=/app/database/vinted_notifications.db
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]
