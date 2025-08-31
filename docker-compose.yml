@@ -1,17 +1,17 @@
-version: '3.8'
-
 services:
   vinted-notifications:
-    image: ghcr.io/terrencestella/vinted-notifications:latest
+    image: vinted-notifications:local
     container_name: vinted-notifications
     ports:
       - "8000:8000"  # Web UI
       - "8001:8001"  # RSS Feed
     volumes:
-      - ./vinted:/app
+      - ./vinted/database:/app/database
+      - ./vinted/logs:/app/logs
     environment:
       - PYTHONUNBUFFERED=1
       - ENV=production
+      - DB_PATH=/app/database/vinted_notifications.db
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]

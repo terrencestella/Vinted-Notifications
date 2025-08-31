@@ -4,9 +4,10 @@ FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 # Set environment variables
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    UV_SYSTEM_PYTHON=1 \
     UV_COMPILE_BYTECODE=1 \
-    UV_CACHE_DIR=/tmp/.uv-cache
+    UV_CACHE_DIR=/tmp/.uv-cache \
+    VIRTUAL_ENV=/app/.venv \
+    PATH="/app/.venv/bin:$PATH"
 
 # Set working directory
 WORKDIR /app
