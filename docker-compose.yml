@@ -9,6 +9,7 @@ services:
       - ./vinted/data:/app/data
       - ./vinted/logs:/app/logs
       - ./vinted/vinted_notifications.db:/app/vinted_notifications.db
+      - ./vinted/rss_feed.db:/app/rss_feed.db
     environment:
       - PYTHONUNBUFFERED=1
       - ENV=production

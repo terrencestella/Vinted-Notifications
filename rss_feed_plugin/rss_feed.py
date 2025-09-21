@@ -3,6 +3,13 @@ import threading, time, db, datetime, html
 from logger import get_logger
 from feedgen.feed import FeedGenerator
 
+# Import RSS database functions
+try:
+    from .rss_db import add_rss_item, get_rss_items, cleanup_old_rss_items
+except ImportError:
+    # Fallback for when running as main module
+    from rss_feed_plugin.rss_db import add_rss_item, get_rss_items, cleanup_old_rss_items
+
 # Get logger for this module
 logger = get_logger(__name__)
 
@@ -11,15 +18,9 @@ class RSSFeed:
     def __init__(self, queue):
         self.app = Flask(__name__)
         self.queue = queue
-        self.items = []
         self.max_items = db.get_parameter("rss_max_items")
 
-        # Initialize feed generator
-        self.fg = FeedGenerator()
-        self.fg.title('Vinted Notifications')
-        self.fg.description('Latest items from Vinted matching your search queries')
-        self.fg.link(href=f'http://localhost:{db.get_parameter("rss_port")}')
-        self.fg.language('en')
+        # RSS feed will be generated dynamically from database
 
         # Set up routes
         self.app.route('/')(self.serve_rss)
@@ -29,6 +30,11 @@ class RSSFeed:
         self.thread.daemon = True
         self.thread.start()
 
+        # Periodic cleanup of old items
+        self.cleanup_thread = threading.Thread(target=self.periodic_cleanup)
+        self.cleanup_thread.daemon = True
+        self.cleanup_thread.start()
+
     def run_check_queue(self):
         while True:
             try:
@@ -37,12 +43,22 @@ class RSSFeed:
             except Exception as e:
                 logger.error(f"Error checking RSS queue: {str(e)}", exc_info=True)
 
+    def periodic_cleanup(self):
+        """Periodically clean up old RSS items"""
+        while True:
+            try:
+                time.sleep(3600)  # Run cleanup every hour
+                max_items = int(self.max_items) * 10  # Keep 10x max for buffer
+                cleanup_old_rss_items(max_items)
+            except Exception as e:
+                logger.error(f"Error in periodic cleanup: {str(e)}", exc_info=True)
+
     def check_rss_queue(self):
         if not self.queue.empty():
             try:
                 content, url, text, buy_url, buy_text = self.queue.get()
 
-                # Add item to the feed
+                # Add item to the database
                 self.add_item_to_feed(content, url)
             except Exception as e:
                 logger.error(f"Error processing item for RSS feed: {str(e)}", exc_info=True)
@@ -60,23 +76,56 @@ class RSSFeed:
         except:
             pass
 
-        # Create a new entry
-        fe = self.fg.add_entry()
-        fe.id(url)
-        fe.title(title)
-        fe.link(href=url)
-        fe.description(html.escape(content))
-        fe.published(datetime.datetime.now(datetime.timezone.utc))
+        # Add item to RSS database
+        published_date = datetime.datetime.now(datetime.timezone.utc)
+        success = add_rss_item(title, content, url, published_date)
 
-        # Add to our items list (for tracking)
-        self.items.append((title, url, content, datetime.datetime.now()))
-
-        # Limit the number of items
-        if len(self.items) > self.max_items:
-            self.items.pop(0)
+        if success:
+            logger.debug(f"Added RSS item to database: {title}")
+        else:
+            logger.debug(f"RSS item already exists in database: {url}")
 
     def serve_rss(self):
-        return Response(self.fg.rss_str(), mimetype='application/rss+xml')
+        """Generate RSS feed dynamically from database"""
+        try:
+            # Create fresh feed generator
+            fg = FeedGenerator()
+            fg.title('Vinted Notifications')
+            fg.description('Latest items from Vinted matching your search queries')
+            fg.link(href=f'http://localhost:{db.get_parameter("rss_port")}')
+            fg.language('en')
+
+            # Get items from database
+            items = get_rss_items(limit=int(self.max_items))
+
+            # Add each item to the feed
+            for title, content, url, published_date in items:
+                fe = fg.add_entry()
+                fe.id(url)
+                fe.title(title)
+                fe.link(href=url)
+                fe.description(html.escape(content))
+
+                # Parse published_date if it's a string
+                if isinstance(published_date, str):
+                    try:
+                        published_date = datetime.datetime.fromisoformat(published_date.replace('Z', '+00:00'))
+                    except:
+                        published_date = datetime.datetime.now(datetime.timezone.utc)
+
+                fe.published(published_date)
+
+            return Response(fg.rss_str(), mimetype='application/rss+xml')
+
+        except Exception as e:
+            logger.error(f"Error generating RSS feed: {str(e)}", exc_info=True)
+            # Return empty feed on error
+            fg = FeedGenerator()
+            fg.title('Vinted Notifications')
+            fg.description('Error generating feed')
+            fg.link(href=f'http://localhost:{db.get_parameter("rss_port")}')
+            fg.language('en')
+            return Response(fg.rss_str(), mimetype='application/rss+xml')
 
     def run(self):
 
