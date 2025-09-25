@@ -80,7 +80,6 @@ Thumbs.db
 .uv/
 
 # Docker
-.dockerignore
 
 # Documentation (keep project docs)
 # *.md
@@ -89,3 +88,8 @@ Thumbs.db
 *.bak
 *.backup
 *~
+
+# Local runtime volumes and data
+vinted/
+.claude/
+coverage.xml

@@ -1,5 +1,6 @@
-from flask import Flask, Response
+from flask import Flask, Response, request
 import threading, time, db, datetime, html
+from queue import Empty as QueueEmpty
 from logger import get_logger
 from feedgen.feed import FeedGenerator
 
@@ -18,7 +19,7 @@ class RSSFeed:
     def __init__(self, queue):
         self.app = Flask(__name__)
         self.queue = queue
-        self.max_items = db.get_parameter("rss_max_items")
+        # Do not cache max_items; fetch from DB when needed
 
         # RSS feed will be generated dynamically from database
 
@@ -38,8 +39,20 @@ class RSSFeed:
     def run_check_queue(self):
         while True:
             try:
-                self.check_rss_queue()
-                time.sleep(0.1)  # Small sleep to prevent high CPU usage
+                # Drain the queue without relying on Queue.empty(), which is unreliable
+                processed = 0
+                while True:
+                    try:
+                        content, url, text, buy_url, buy_text = self.queue.get_nowait()
+                        self.add_item_to_feed(content, url)
+                        processed += 1
+                    except QueueEmpty:
+                        break
+                    except Exception as e:
+                        logger.error(f"Error getting item from RSS queue: {str(e)}", exc_info=True)
+                        break
+                if processed == 0:
+                    time.sleep(0.1)  # Small sleep to prevent high CPU usage when idle
             except Exception as e:
                 logger.error(f"Error checking RSS queue: {str(e)}", exc_info=True)
 
@@ -48,20 +61,25 @@ class RSSFeed:
         while True:
             try:
                 time.sleep(3600)  # Run cleanup every hour
-                max_items = int(self.max_items) * 10  # Keep 10x max for buffer
-                cleanup_old_rss_items(max_items)
+                # Re-read max_items from DB to honor config changes without restart
+                try:
+                    max_items = int(db.get_parameter("rss_max_items"))
+                except Exception:
+                    max_items = 100
+                cleanup_old_rss_items(max_items * 10)  # Keep 10x max for buffer
             except Exception as e:
                 logger.error(f"Error in periodic cleanup: {str(e)}", exc_info=True)
 
     def check_rss_queue(self):
-        if not self.queue.empty():
-            try:
-                content, url, text, buy_url, buy_text = self.queue.get()
-
-                # Add item to the database
+        # Deprecated by run_check_queue drain logic; keep for backward compatibility
+        try:
+            while True:
+                content, url, text, buy_url, buy_text = self.queue.get_nowait()
                 self.add_item_to_feed(content, url)
-            except Exception as e:
-                logger.error(f"Error processing item for RSS feed: {str(e)}", exc_info=True)
+        except QueueEmpty:
+            return
+        except Exception as e:
+            logger.error(f"Error processing item for RSS feed: {str(e)}", exc_info=True)
 
     def add_item_to_feed(self, content, url):
         # Extract title from content (assuming it's in the format from configuration_values.MESSAGE)
@@ -92,11 +110,16 @@ class RSSFeed:
             fg = FeedGenerator()
             fg.title('Vinted Notifications')
             fg.description('Latest items from Vinted matching your search queries')
-            fg.link(href=f'http://localhost:{db.get_parameter("rss_port")}')
+            # Use the actual host seen by the client instead of localhost
+            fg.link(href=request.host_url.rstrip('/'))
             fg.language('en')
 
             # Get items from database
-            items = get_rss_items(limit=int(self.max_items))
+            try:
+                max_items = int(db.get_parameter("rss_max_items"))
+            except Exception:
+                max_items = 100
+            items = get_rss_items(limit=max_items)
 
             # Add each item to the feed
             for title, content, url, published_date in items:
@@ -123,14 +146,18 @@ class RSSFeed:
             fg = FeedGenerator()
             fg.title('Vinted Notifications')
             fg.description('Error generating feed')
-            fg.link(href=f'http://localhost:{db.get_parameter("rss_port")}')
+            fg.link(href=request.host_url.rstrip('/'))
             fg.language('en')
             return Response(fg.rss_str(), mimetype='application/rss+xml')
 
     def run(self):
 
         try:
-            port = db.get_parameter("rss_port")
+            # Ensure port is an int
+            try:
+                port = int(db.get_parameter("rss_port"))
+            except Exception:
+                port = 8001
             logger.info(f"Starting RSS feed server on port {port}")
             self.app.run(host='0.0.0.0', port=port)
         except Exception as e:

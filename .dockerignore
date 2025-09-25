@@ -1,0 +1,109 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+CLAUDE.md
+*.md
+docs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+env.bak/
+venv.bak/
+
+# Development tools
+.pytest_cache/
+.coverage
+.mypy_cache/
+.tox/
+.nox/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Docker
+Dockerfile*
+docker-compose*
+.dockerignore
+
+# Logs
+*.log
+logs/
+vinted.log
+
+# Temporary files
+tmp/
+temp/
+*.tmp
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+vinted.db
+vinted_notifications.db
+
+# Environment variables
+.env
+.env.local
+.env.production
+.env.staging
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Node.js (if any)
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# GitHub & Claude (exclude workflows from container)
+.github/
+.claude/
+
+# Project-specific data (runtime generated)
+*.db
+*.sqlite
+*.sqlite3
+vinted.db
+vinted_notifications.db
+logs/
+*.log
+data/
+vinted/
+
+# Project documentation
+CLAUDE.md
+AGENTS.md
+README.md
+# Development files (keep migrations for database setup)
+# migrations/
+
+# UV
+.uv/
